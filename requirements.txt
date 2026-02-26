@@ -1,0 +1,6 @@
+# ZED 2i RGB Cube Mapper dependencies
+# Note: pyzed must be installed via ZED SDK: /usr/local/zed/get_python_api.py
+# Note: For ROS2 publishing, source your ROS2 install: source /opt/ros/<distro>/setup.bash
+
+numpy>=1.19.0
+opencv-python>=4.5.0
