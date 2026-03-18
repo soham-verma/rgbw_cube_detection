@@ -18,9 +18,9 @@ COLOR_RANGES = {
     "blue": [
         ((100, 80, 80), (130, 255, 255)),
     ],
-    "white": [
-        ((0, 0, 180), (180, 50, 255)),  # Low saturation, high value
-    ],
+    # "white": [
+    #     ((0, 0, 180), (180, 50, 255)),  # Low saturation, high value
+    # ],
 }
 
 # Label indices for ZED custom box objects (must match order)
@@ -53,3 +53,9 @@ MAP_SIZE = 800   # Size of map panel in pixels
 
 # ROS2 topic for publishing cube coordinates (std_msgs/String, JSON)
 ROS2_CUBES_TOPIC = "/rgbw_cube_detection/cubes"
+
+# zed_wrapper topics (for cube_detection_node when using zed_wrapper + rtabmap)
+# Adjust namespace if your zed_wrapper uses different naming
+ZED_IMAGE_TOPIC = "/zed/zed_node/rgb/color/rect/image"
+ZED_DEPTH_TOPIC = "/zed/zed_node/depth/depth_registered"
+ZED_CAMERA_INFO_TOPIC = "/zed/zed_node/rgb/color/rect/camera_info"

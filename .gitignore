@@ -17,3 +17,6 @@ __pycache__/
 # Output
 cube_map.json
 *.svo
+runs/
+models/
+rgbw_dataset/

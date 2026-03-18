@@ -1,6 +1,10 @@
 # ZED 2i RGB Cube Mapper dependencies
 # Note: pyzed must be installed via ZED SDK: /usr/local/zed/get_python_api.py
-# Note: For ROS2 publishing, source your ROS2 install: source /opt/ros/<distro>/setup.bash
+# Note: For ROS2, source your ROS2 install: source /opt/ros/<distro>/setup.bash
+# Note: zed_objects_to_cubes_node needs ros-humble-zed-msgs: sudo apt install ros-humble-zed-msgs
 
-numpy>=1.19.0
+numpy>=1.19.0,<2  # cv_bridge (ROS Humble) requires NumPy 1.x
 opencv-python>=4.5.0
+
+# For YOLO training (scripts/train_rgbw_yolo.py)
+ultralytics>=8.0.0
