@@ -14,6 +14,12 @@ Usage:
     # Terminal 2 - Run this node (with live view):
     python ros2_cube_detector_node.py
 
+    # Camera frame only (default) - XYZ relative to the camera right now:
+    python ros2_cube_detector_node.py
+
+    # World frame - XYZ relative to the map origin (requires /zed/zed_node/pose):
+    python ros2_cube_detector_node.py --world-frame
+
     # Without the live window:
     python ros2_cube_detector_node.py --no-display
 """
@@ -28,6 +34,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import rclpy
+from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, Image
@@ -38,6 +45,7 @@ from config import (
     ZED_CAMERA_INFO_TOPIC,
     ZED_DEPTH_TOPIC,
     ZED_IMAGE_TOPIC,
+    ZED_POSE_TOPIC,
 )
 from cube_detector import detect as detect_cubes
 
@@ -53,6 +61,27 @@ _COLOR_BGR = {
     "blue":  (255, 80,  0),
     "white": (220, 220, 220),
 }
+
+
+def _quat_to_rotation_matrix(qx: float, qy: float, qz: float, qw: float) -> np.ndarray:
+    """Convert a unit quaternion to a 3x3 rotation matrix."""
+    return np.array([
+        [1 - 2*(qy*qy + qz*qz),     2*(qx*qy - qz*qw),     2*(qx*qz + qy*qw)],
+        [    2*(qx*qy + qz*qw), 1 - 2*(qx*qx + qz*qz),     2*(qy*qz - qx*qw)],
+        [    2*(qx*qz - qy*qw),     2*(qy*qz + qx*qw), 1 - 2*(qx*qx + qy*qy)],
+    ], dtype=np.float64)
+
+
+def _transform_to_world(
+    x_cam: float, y_cam: float, z_cam: float, pose: PoseStamped
+) -> tuple[float, float, float]:
+    """Transform a camera-frame point to world frame using the camera pose."""
+    p = pose.pose.position
+    q = pose.pose.orientation
+    R = _quat_to_rotation_matrix(q.x, q.y, q.z, q.w)
+    cam_pt = np.array([x_cam, y_cam, z_cam])
+    world_pt = R @ cam_pt + np.array([p.x, p.y, p.z])
+    return float(world_pt[0]), float(world_pt[1]), float(world_pt[2])
 
 
 def _ros_image_to_numpy(msg: Image) -> np.ndarray | None:
@@ -85,10 +114,12 @@ def _ros_image_to_numpy(msg: Image) -> np.ndarray | None:
 
 
 class CubeDetectorNode(Node):
-    def __init__(self, show_display: bool = True) -> None:
+    def __init__(self, show_display: bool = True, world_frame: bool = False) -> None:
         super().__init__("cube_detector_node")
         self._show_display = show_display
+        self._world_frame = world_frame
         self._camera_info: CameraInfo | None = None
+        self._latest_pose: PoseStamped | None = None
         self._last_print_time = 0.0
 
         # ZED topics typically use SensorDataQoS (best-effort). If we subscribe
@@ -102,6 +133,10 @@ class CubeDetectorNode(Node):
         self.create_subscription(
             Image, ZED_DEPTH_TOPIC, self._depth_cb, qos_profile_sensor_data
         )
+        if world_frame:
+            self.create_subscription(
+                PoseStamped, ZED_POSE_TOPIC, self._pose_cb, qos_profile_sensor_data
+            )
 
         self._latest_rgb: np.ndarray | None = None
         self._latest_depth: np.ndarray | None = None
@@ -113,6 +148,10 @@ class CubeDetectorNode(Node):
         self.get_logger().info(f"Subscribing to RGB:   {ZED_IMAGE_TOPIC}")
         self.get_logger().info(f"Subscribing to Depth: {ZED_DEPTH_TOPIC}")
         self.get_logger().info(f"Subscribing to Info:  {ZED_CAMERA_INFO_TOPIC}")
+        if world_frame:
+            self.get_logger().info(f"Subscribing to Pose: {ZED_POSE_TOPIC}  (world frame mode)")
+        else:
+            self.get_logger().info("Frame: camera  (use --world-frame for map-origin coordinates)")
         if show_display:
             self.get_logger().info("Live view enabled  (press 'q' in the window to quit)")
         self.get_logger().info("Waiting for messages...")
@@ -137,6 +176,9 @@ class CubeDetectorNode(Node):
             depth = depth.astype(np.float32) / 1000.0
         self._latest_depth = depth
         self._depth_stamp = msg.header.stamp
+
+    def _pose_cb(self, msg: PoseStamped) -> None:
+        self._latest_pose = msg
 
     def _sample_depth(self, depth_img: np.ndarray, cx: int, cy: int) -> float:
         """Sample depth around (cx, cy) with a small window, returning median of valid values."""
@@ -206,17 +248,32 @@ class CubeDetectorNode(Node):
             if not np.isfinite(z):
                 continue
 
-            x_cam = (px - cx_cam) * z / fx
-            y_cam = (py - cy_cam) * z / fy
+            x_out = (px - cx_cam) * z / fx
+            y_out = (py - cy_cam) * z / fy
+            z_out = z
+            frame_label = "camera frame"
+
+            if self._world_frame:
+                if self._latest_pose is None:
+                    self.get_logger().warn(
+                        "World frame requested but no pose received yet — "
+                        "falling back to camera frame",
+                        throttle_duration_sec=5.0,
+                    )
+                else:
+                    x_out, y_out, z_out = _transform_to_world(
+                        x_out, y_out, z_out, self._latest_pose
+                    )
+                    frame_label = "world frame"
 
             if throttled:
                 lines.append(
-                    f"  {color:>6s}: x={x_cam:+.3f}  y={y_cam:+.3f}  z={z:.3f} m  "
+                    f"  {color:>6s}: x={x_out:+.3f}  y={y_out:+.3f}  z={z_out:.3f} m  "
                     f"(px {px},{py}  conf {det['probability']:.0%})"
                 )
 
         if throttled and lines:
-            self.get_logger().info("--- Detected cubes (camera frame) ---")
+            self.get_logger().info(f"--- Detected cubes ({frame_label}) ---")
             for line in lines:
                 self.get_logger().info(line)
 
@@ -231,10 +288,18 @@ class CubeDetectorNode(Node):
 def main() -> None:
     parser = argparse.ArgumentParser(description="ZED cube detector ROS2 node")
     parser.add_argument("--no-display", action="store_true", help="Disable the live OpenCV window")
+    parser.add_argument(
+        "--world-frame",
+        action="store_true",
+        help=(
+            "Report cube XYZ in the world/map frame (requires /zed/zed_node/pose). "
+            "Default is camera frame — coordinates relative to the camera right now."
+        ),
+    )
     args, ros_args = parser.parse_known_args()
 
     rclpy.init(args=ros_args if ros_args else None)
-    node = CubeDetectorNode(show_display=not args.no_display)
+    node = CubeDetectorNode(show_display=not args.no_display, world_frame=args.world_frame)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
